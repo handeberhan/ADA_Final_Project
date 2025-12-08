@@ -1,0 +1,800 @@
+---
+title: "ADA_Final_Project"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+library(haven)     # for reading XPT files
+library(dplyr)     # data cleaning
+library(survey)    # survey-weighted analysis
+library(janitor)   # cleaning variable names
+```
+```{r}
+brfss <- X2024_BRFSS %>%
+  mutate(
+    screened = case_when(
+      PDIABTS1 == 1 ~ 1,
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,
+      PDIABTS1 %in% c(7,9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+```
+
+```{r}
+brfss <- brfss %>%
+  mutate(
+    insurance = case_when(
+      PRIMINS2 %in% c(1,2,3,4,5,6,7,9,10) ~ 1,
+      PRIMINS2 == 88 ~ 0,
+      PRIMINS2 == 8 ~ NA_real_,                  # ❌ EXCLUDE IHS
+      PRIMINS2 %in% c(77,99) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+```
+
+```{r}
+table(brfss$PRIMINS2, brfss$insurance, useNA = "ifany")
+```
+```{r}
+X2024_BRFSS <- X2024_BRFSS %>%
+  mutate(
+    SCREENED = case_when(
+      PDIABTS1 == 1 ~ 1,
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,
+      PDIABTS1 %in% c(7,9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+```
+
+```{r}
+table(X2024_BRFSS$PDIABTS1, X2024_BRFSS$SCREENED, useNA = "ifany")
+
+```
+```{r}
+X2024_BRFSS <- X2024_BRFSS %>%
+  mutate(
+    INCOME_BINARY = case_when(
+      INCOME3 %in% c(8,9,10,11) ~ 1,     # High income (≥ $75k, includes > median)
+      INCOME3 %in% c(1,2,3,4,5,6,7) ~ 0, # Low income (< $75k)
+      INCOME3 %in% c(77,99) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+```
+
+```{r}
+table(X2024_BRFSS$INCOME3, X2024_BRFSS$INCOME_BINARY, useNA = "ifany")
+```
+```{r}
+names(X2024_BRFSS)
+```
+
+```{r}
+grep("RACE", names(X2024_BRFSS), value = TRUE)
+```
+```{r}
+library(dplyr)
+```
+
+```{r}
+X2024_BRFSS <- X2024_BRFSS %>%
+  mutate(
+    SCREENED = case_when(
+      PDIABTS1 == 1 ~ 1,
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,
+      PDIABTS1 %in% c(7,9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    INSURANCE = case_when(
+      PRIMINS2 %in% c(1,2,3,4,5,6,7,9,10) ~ 1,
+      PRIMINS2 == 88 ~ 0,
+      PRIMINS2 %in% c(77,99,8) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    INCOME_BINARY = case_when(
+      INCOME3 %in% c(1,2,3,4,5,6,7,8) ~ 0,
+      INCOME3 %in% c(9,10,11) ~ 1,
+      INCOME3 %in% c(77,99) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    RACE_ETH = case_when(
+      `@_IMPRACE` == 1 ~ "WHITE",
+      `@_IMPRACE` == 2 ~ "BLACK",
+      `@_IMPRACE` == 3 ~ "ASIAN",
+      `@_IMPRACE` == 4 ~ "AIAN",
+      `@_IMPRACE` == 5 ~ "HISPANIC",
+      `@_IMPRACE` == 6 ~ "OTHER",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Set WHITE as reference
+X2024_BRFSS$RACE_ETH <- relevel(factor(X2024_BRFSS$RACE_ETH), ref = "WHITE")
+
+```
+
+```{r}
+table(X2024_BRFSS$`@_IMPRACE`, X2024_BRFSS$RACE_ETH, useNA = "ifany")
+```
+```{r}
+library(survey)
+```
+
+```{r}
+options(survey.lonely.psu = "adjust")
+
+BRFSS_DESIGN <- svydesign(
+  ids = ~`@_PSU`,
+  strata = ~`@_STSTR`,
+  weights = ~`@_LLCPWT`,
+  nest = TRUE,
+  data = X2024_BRFSS
+)
+```
+
+#verify that the survey design object was created successfully 
+```{r} 
+names(BRFSS_DESIGN$variables)
+```
+
+```{r}
+MODEL <- svyglm(SCREENED ~ INSURANCE + INCOME_BINARY + RACE_ETH,
+                design = BRFSS_DESIGN,
+                family = quasibinomial())
+```
+
+```{r}
+X2024_BRFSS <- X2024_BRFSS %>%
+  mutate(
+    RACE_ETH = case_when(
+      `@_IMPRACE` == 1 ~ "WHITE",
+      `@_IMPRACE` == 2 ~ "BLACK",
+      `@_IMPRACE` == 3 ~ "ASIAN",
+      `@_IMPRACE` == 4 ~ "AIAN",
+      `@_IMPRACE` == 5 ~ "HISPANIC",
+      `@_IMPRACE` == 6 ~ "OTHER",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+```{r}
+X2024_BRFSS <- X2024_BRFSS %>%
+  mutate(
+    SCREENED = case_when(
+      PDIABTS1 == 1 ~ 1,
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,
+      PDIABTS1 %in% c(7,9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    INSURANCE = case_when(
+      PRIMINS2 %in% c(1,2,3,4,5,6,7,9,10) ~ 1,
+      PRIMINS2 == 88 ~ 0,
+      PRIMINS2 %in% c(77,99,8) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    INCOME_BINARY = case_when(
+      INCOME3 %in% c(1,2,3,4,5,6,7,8) ~ 0,   # under $83,730
+      INCOME3 %in% c(9,10,11) ~ 1,          # above $83,730
+      INCOME3 %in% c(77,99) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    RACE_ETH = case_when(
+      `@_IMPRACE` == 1 ~ "WHITE",
+      `@_IMPRACE` == 2 ~ "BLACK",
+      `@_IMPRACE` == 3 ~ "ASIAN",
+      `@_IMPRACE` == 4 ~ "AIAN",
+      `@_IMPRACE` == 5 ~ "HISPANIC",
+      `@_IMPRACE` == 6 ~ "OTHER",
+      TRUE ~ NA_character_
+    )
+  )
+
+```
+
+```{r}
+options(survey.lonely.psu = "adjust")
+
+BRFSS_DESIGN <- svydesign(
+  ids     = ~`@_PSU`,
+  strata  = ~`@_STSTR`,
+  weights = ~`@_LLCPWT`,
+  nest    = TRUE,
+  data    = X2024_BRFSS
+)
+
+BRFSS_DESIGN
+```
+```{r}
+MODEL <- svyglm(
+  SCREENED ~ INSURANCE + INCOME_BINARY + RACE_ETH,
+  design = BRFSS_DESIGN,
+  family = quasibinomial()
+)
+```
+
+```{r}
+summary(MODEL)
+```
+
+```{r}
+OR_TABLE <- cbind(
+  OR = exp(coef(MODEL)),
+  LOWER = exp(confint(MODEL)[,1]),
+  UPPER = exp(confint(MODEL)[,2])
+)
+
+OR_TABLE
+```
+
+```{r}
+MODEL_INT_RACE <- svyglm(
+  SCREENED ~ INSURANCE * RACE_ETH + INCOME_BINARY,
+  design = BRFSS_DESIGN,
+  family = quasibinomial()
+)
+
+summary(MODEL_INT_RACE)
+```
+
+```{r}
+MODEL_INT_INCOME <- svyglm(
+  SCREENED ~ INSURANCE * INCOME_BINARY + RACE_ETH,
+  design = BRFSS_DESIGN,
+  family = quasibinomial()
+)
+
+summary(MODEL_INT_INCOME)
+```
+
+```{r}
+anova(MODEL, MODEL_INT_RACE)
+anova(MODEL, MODEL_INT_INCOME)
+```
+```{r}
+library(car)
+vif(MODEL)
+```
+```{r}
+coef_vec <- coef(MODEL_INT_RACE)
+vcov_mat <- vcov(MODEL_INT_RACE)
+
+newdat <- expand.grid(
+  INSURANCE = c(0, 1),
+  RACE_ETH = levels(X2024_BRFSS$RACE_ETH),
+  INCOME_BINARY = mean(X2024_BRFSS$INCOME_BINARY, na.rm = TRUE)
+)
+
+Xmat <- model.matrix(~ INSURANCE * RACE_ETH + INCOME_BINARY, data = newdat)
+
+# Linear predictor
+linpred <- Xmat %*% coef_vec
+
+# Standard errors
+se_linpred <- sqrt(diag(Xmat %*% vcov_mat %*% t(Xmat)))
+
+predicted <- plogis(linpred)
+lower <- plogis(linpred - 1.96 * se_linpred)
+upper <- plogis(linpred + 1.96 * se_linpred)
+
+newdat$predicted <- predicted
+newdat$lower <- lower
+newdat$upper <- upper
+
+newdat$INSURANCE <- factor(newdat$INSURANCE,
+                           levels = c(0,1),
+                           labels = c("Uninsured", "Insured"))
+
+library(ggplot2)
+
+ggplot(newdat, aes(x = RACE_ETH, y = predicted,
+                   color = INSURANCE, group = INSURANCE)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width = 0.1, size = 0.7) +
+  labs(title = "Adjusted Predicted Probability of Diabetes Screening",
+       subtitle = "By Insurance Status and Race/Ethnicity (BRFSS 2024)",
+       x = "Race/Ethnicity",
+       y = "Predicted Probability",
+       color = "Insurance Status") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+
+```
+```{r}
+newdat2 <- expand.grid(
+  INSURANCE = c(0, 1),
+  INCOME_BINARY = c(0, 1),
+  RACE_ETH = levels(X2024_BRFSS$RACE_ETH)
+)
+
+coef_vec <- coef(MODEL_INT_RACE)
+vcov_mat <- vcov(MODEL_INT_RACE)
+
+Xmat2 <- model.matrix(~ INSURANCE * RACE_ETH + INCOME_BINARY, data = newdat2)
+
+linpred2 <- Xmat2 %*% coef_vec
+se_linpred2 <- sqrt(diag(Xmat2 %*% vcov_mat %*% t(Xmat2)))
+
+newdat2$predicted <- plogis(linpred2)
+newdat2$lower <- plogis(linpred2 - 1.96 * se_linpred2)
+newdat2$upper <- plogis(linpred2 + 1.96 * se_linpred2)
+
+newdat2$INSURANCE <- factor(newdat2$INSURANCE,
+                             levels = c(0,1),
+                             labels = c("Uninsured", "Insured"))
+
+newdat2$INCOME_BINARY <- factor(newdat2$INCOME_BINARY,
+                                levels = c(0,1),
+                                labels = c("Low Income", "High Income"))
+
+library(ggplot2)
+
+ggplot(newdat2, aes(x = RACE_ETH, y = predicted,
+                    color = INSURANCE, group = INSURANCE)) +
+  geom_point(size = 2.8) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width = 0.1, size = 0.6) +
+  facet_wrap(~ INCOME_BINARY) +
+  labs(
+    title = "Adjusted Predicted Probability of Diabetes Screening",
+    subtitle = "By Insurance Status, Race/Ethnicity, and Income Level (BRFSS 2024)",
+    x = "Race/Ethnicity",
+    y = "Predicted Probability",
+    color = "Insurance Status"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(size = 13, face = "bold"),
+    legend.position = "right"
+  )
+
+theme_minimal(base_size = 14) +
+theme(
+  plot.title = element_text(face = "bold"),
+  strip.text = element_text(size = 13, face = "bold"),
+  axis.text.x = element_text(angle = 45, hjust = 1),
+  legend.position = "right"
+)
+
+
+```
+```{r}
+newdata <- expand.grid(
+  INSURANCE = c(0,1),
+  RACE_ETH = levels(X2024_BRFSS$RACE_ETH),
+  INCOME_BINARY = c(0,1)
+)
+
+pred <- predict(MODEL_INT_INCOME,
+                newdata = newdata,
+                type = "response",
+                se.fit = TRUE)
+
+str(pred)
+
+newdata <- expand.grid(
+  INSURANCE = c(0, 1),
+  RACE_ETH = levels(X2024_BRFSS$RACE_ETH),
+  INCOME_BINARY = c(0, 1)
+)
+
+pred <- predict(
+  MODEL_INT_INCOME,
+  newdata = newdata,
+  type = "response",
+  se.fit = TRUE
+)
+
+# Extract fit & SE correctly from svystat object
+newdata$fit   <- as.numeric(pred)
+newdata$se    <- sqrt(attr(pred, "var"))
+newdata$lower <- newdata$fit - 1.96 * newdata$se
+newdata$upper <- newdata$fit + 1.96 * newdata$se
+
+# Plot
+ggplot(newdata, aes(x = RACE_ETH, y = fit, color = factor(INSURANCE))) +
+  geom_point(position = position_dodge(width = 0.4)) +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper),
+    width = 0.2,
+    position = position_dodge(width = 0.4)
+  ) +
+  facet_wrap(~ INCOME_BINARY,
+             labeller = labeller(INCOME_BINARY = c("0" = "Low Income",
+                                                   "1" = "High Income"))) +
+  theme_bw() +
+  labs(
+    color = "Insurance Status",
+    y = "Predicted Probability",
+    x = "Race/Ethnicity"
+  )
+
+```
+
+```{r}
+nrow(X2024_BRFSS)
+```
+
+2024 BRFSS Raw Dataset
+N = 457,670 respondents
+
+│
+├─ Excluded: Respondents who answered “Don’t know/Not sure” or “Refused”
+│    for diabetes screening question (PDIABTS1 = 7, 9)
+│    n = ______
+│
+├─ Excluded: Respondents missing or refusing insurance information
+│    PRIMINS2 = 77 (“Don’t know”), 99 (“Refused”)
+│    n = ______
+│
+├─ Excluded: Respondents whose primary health care coverage
+│    was Indian Health Service (IHS) (PRIMINS2 = 8)
+│    n = 1,409
+│
+├─ Excluded: Respondents who refused or did not know income level
+│    INCOME3 = 77, 99
+│    n = ______
+│
+├─ Excluded: Respondents missing/imputed race-ethnicity information
+│    ( @_IMPRACE missing)
+│    n = ______
+│
+▼
+Final Analytic Sample
+N = 457,670 respondents
+(complete data for diabetes screening, insurance, income, and race/ethnicity)
+
+
+```{r}
+sum(X2024_BRFSS$PDIABTS1 %in% c(7, 9), na.rm = TRUE)
+
+sum(X2024_BRFSS$PRIMINS2 %in% c(77, 99), na.rm = TRUE)
+
+sum(X2024_BRFSS$INCOME3 %in% c(77, 99), na.rm = TRUE)
+
+sum(is.na(X2024_BRFSS$`@_IMPRACE`))
+
+```
+```{r}
+grep("AGE", names(X2024_BRFSS), value = TRUE)
+```
+```{r}
+table(X2024_BRFSS$`@_AGEG5YR`, useNA = "ifany")
+
+```
+
+```{r}
+grep("SEX", names(X2024_BRFSS), value = TRUE)
+```
+
+```{r}
+install.packages("janitor")
+library(janitor)
+
+```
+```{r}
+library(tidyr)
+library(janitor)
+library(dplyr)
+
+table1 <- X2024_BRFSS %>%
+  select(AGE_GROUP, SEX, RACE_ETH, INSURANCE, INCOME_BINARY) %>%
+  mutate(across(everything(), as.character)) %>%   # ← key step!
+  pivot_longer(cols = everything(),
+               names_to = "Variable",
+               values_to = "Category") %>%
+  tabyl(Variable, Category) %>%
+  adorn_percentages("row") %>%
+  adorn_rounding(1) %>%
+  adorn_totals("col")
+
+```
+
+```{r}
+tab_age <- X2024_BRFSS %>%
+  tabyl(AGE_GROUP) %>%
+  adorn_totals() %>%
+  adorn_pct_formatting()
+
+tab_sex <- X2024_BRFSS %>%
+  tabyl(SEX) %>%
+  adorn_totals() %>%
+  adorn_pct_formatting()
+
+tab_race <- X2024_BRFSS %>%
+  tabyl(RACE_ETH) %>%
+  adorn_totals() %>%
+  adorn_pct_formatting()
+
+tab_ins <- X2024_BRFSS %>%
+  tabyl(INSURANCE) %>%
+  adorn_totals() %>%
+  adorn_pct_formatting()
+
+tab_income <- X2024_BRFSS %>%
+  tabyl(INCOME_BINARY) %>%
+  adorn_totals() %>%
+  adorn_pct_formatting()
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(janitor)
+
+table1 <- X2024_BRFSS %>%
+  select(
+    AGE_GROUP,
+    SEX,
+    RACE_ETH,
+    INSURANCE,
+    INCOME_BINARY
+  ) %>%
+  mutate(across(everything(), as.character)) %>% 
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Category"
+  ) %>%
+  tabyl(Variable, Category) %>%
+  adorn_totals("row") %>%         #  Add row totals FIRST
+  adorn_totals("col") %>%         #  Add column totals SECOND
+  adorn_percentages("row") %>%    # Convert to percentages
+  adorn_pct_formatting(digits = 1)
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(janitor)
+
+table1 <- X2024_BRFSS %>%
+  select(
+    AGE_GROUP,
+    SEX,
+    RACE_ETH,
+    INSURANCE,
+    INCOME_BINARY
+  ) %>%
+  mutate(across(everything(), as.character)) %>% 
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Category"
+  ) %>%
+  tabyl(Variable, Category) %>%
+  adorn_totals("row") %>%      
+  adorn_totals("col") %>%      
+  adorn_percentages("row") %>% 
+  adorn_pct_formatting(digits = 1)
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+table1_clean <- X2024_BRFSS %>%
+  select(
+    AGE_GROUP,
+    SEX,
+    RACE_ETH,
+    INSURANCE,
+    INCOME_BINARY
+  ) %>%
+  mutate(across(everything(), as.character)) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Category"
+  ) %>%
+  group_by(Variable, Category) %>%
+  summarise(Frequency = n(), .groups = "drop") %>%
+  group_by(Variable) %>%
+  mutate(Percent = round(Frequency / sum(Frequency) * 100, 1))
+
+install.packages("gt")
+
+library(gt)
+
+table1_clean %>%
+  gt(groupname_col = "Variable") %>%
+  cols_label(
+    Category = "Characteristics",
+    Frequency = "Frequency",
+    Percent = "Percent"
+  ) %>%
+  fmt_number(
+    columns = Percent,
+    decimals = 1
+  ) %>%
+  tab_header(
+    title = md("**Table 1. Study Population Characteristics**"),
+    subtitle = "2024 BRFSS Analytic Sample"
+  ) %>%
+  tab_options(
+    table.font.size = 12,
+    data_row.padding = px(2),
+    column_labels.font.weight = "bold"
+  )
+
+```
+```{r}
+install.packages("dagitty")
+library(dagitty)
+
+dag_model <- dagitty("
+dag {
+  RACE_ETH
+  INCOME_BINARY
+  INSURANCE
+  SCREENED
+
+  RACE_ETH -> INCOME_BINARY
+  RACE_ETH -> INSURANCE
+  RACE_ETH -> SCREENED
+  
+  INCOME_BINARY -> INSURANCE
+  INCOME_BINARY -> SCREENED
+  
+  INSURANCE -> SCREENED
+}
+")
+
+plot(dag_model)
+
+```
+```{r}
+library(DiagrammeR)
+
+grViz("
+digraph DAG {
+
+  # Node formatting
+  node [shape = box, fontsize = 12]
+
+  # Full name nodes
+  RaceEthnicity [label = 'Race/Ethnicity']
+  Income [label = 'Household Income']
+  Insurance [label = 'Insurance Status']
+  Screening [label = 'Diabetes Screening (Past Year)']
+
+  AccessCare [label = 'Access to Care']
+  HealthStatus [label = 'Health Status / Chronic Conditions']
+
+  Age [label = 'Age']
+  Sex [label = 'Sex']
+  Education [label = 'Educational Attainment']
+
+  # Causal arrows
+  RaceEthnicity -> Education
+  Education -> Income
+  RaceEthnicity -> Income
+  Income -> Insurance
+  Insurance -> AccessCare
+  AccessCare -> Screening
+
+  RaceEthnicity -> Insurance
+  RaceEthnicity -> Screening
+
+  Income -> Screening
+  Insurance -> Screening
+
+  HealthStatus -> Screening
+  RaceEthnicity -> HealthStatus
+  Income -> HealthStatus
+  Age -> HealthStatus
+
+  Age -> Insurance
+  Age -> Screening
+
+  Sex -> AccessCare
+  Sex -> Screening
+
+}
+")
+
+```
+```{r}
+library(DiagrammeR)
+
+grViz("
+digraph DAG {
+
+  graph [layout = dot, rankdir = LR]
+
+  node [shape = box, fontsize = 12]
+
+  # Nodes with full labels
+  RaceEthnicity [label = 'Race/Ethnicity']
+  Education [label = 'Educational Attainment']
+  Income [label = 'Household Income']
+  Insurance [label = 'Insurance Status']
+  AccessCare [label = 'Access to Care']
+  HealthStatus [label = 'Health Status / Chronic Conditions']
+  Screening [label = 'Diabetes Screening\n(Past Year)']
+
+  Age [label = 'Age']
+  Sex [label = 'Sex']
+
+  # Rank groups for left-to-right alignment
+  {rank = same; RaceEthnicity; Age; Sex}
+  {rank = same; Education; Income}
+  {rank = same; Insurance; HealthStatus}
+  {rank = same; AccessCare}
+  {rank = same; Screening}
+
+  # Causal arrows
+  RaceEthnicity -> Education
+  Education -> Income
+  RaceEthnicity -> Income
+
+  Income -> Insurance
+  Insurance -> AccessCare
+  AccessCare -> Screening
+
+  RaceEthnicity -> Insurance
+  RaceEthnicity -> Screening
+
+  Income -> Screening
+  Insurance -> Screening
+
+  HealthStatus -> Screening
+  RaceEthnicity -> HealthStatus
+  Income -> HealthStatus
+  Age -> HealthStatus
+
+  Age -> Insurance
+  Age -> Screening
+
+  Sex -> AccessCare
+  Sex -> Screening
+
+}
+")
+
+```
