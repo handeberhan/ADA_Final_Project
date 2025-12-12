@@ -1,0 +1,751 @@
+---
+# ADA Final Project 
+
+## Project Description
+This repository includes the cleaned 2024 BRFSS dataset and R markdown code used to analyze and run regression analyses on it. This project is part of the final project to practice running regression analysis using real-world data to answer my research question. 
+
+## Files Included
+- `analytic_clean`: Cleaned version of the 2024 BRFSS dataset
+- `ADA_Final.Rmd`: R script used to run regression analyses and visualize the data
+- `README.md`: This file
+
+## What the Code Does
+- Reads in the 2024 BRFSS survey dataset
+- Performs basic data cleaning (e.g., renaming columns, recoding categories, filtering)
+- Creates summary statistics (e.g., age, gender, responses)
+- Run binary logistic regresssion analyses (unadjusted, adjusted, interaction models)
+- Generates a flowchart, tables, figures, and plots to visualize the data
+
+## How to Run the Code
+1. Download or clone this repository to your computer
+2. Open `ADA_Final.Rmd` in RStudio
+3. Make sure your working directory is set to the folder where the files are saved
+4. Run the script
+
+## Author
+- Name: Hieran Andeberhan
+- Course: ADA   
+- Date: December 11, 2025 
+
+title: "Diabetes Screening By Insurance Status Among US Adults (2024 BRFSS)"
+output: html_document
+
+---
+# Download packages and libraries 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+install.packages("odds.n.ends")
+library(tidyverse)
+library(car)
+library(odds.n.ends)
+library(ggplot2)
+library(DiagrammeR)
+library(DiagrammeRsvg)
+library(rsvg)
+library(table1)
+```
+
+# Background 
+
+In 2021, more than 38.1 million adults over the age of 18 were diagnosed with diabetes. Considering that nearly 14.7% of American adults have diabetes, research focused on how to increase diabetes screenings is essential to improving nationwide health outcomes. To examine whether blood tests for diabetes within the past 12 months differ by insurance status among US adults, this analysis uses a cross-sectional study design and conducts a binary logistic regression using the 2024 Behavioral Risk Factor Surveillance System (BRFSS) dataset. 
+
+# Methods 
+
+## Data Source: 2024 BRFSS 
+
+## Variables: 
+      Exposure: Insurance Status (PRIMINS2)
+      Outcome: Diabetes screening within past 12 months (PDIABTS1)
+      Covariates: 
+        - Income (INCOME3)
+        - Race (_IMPRACE)
+        - Sex (SEXVAR)
+        - Age (_AGE65YR)
+    
+## Statistical Analysis
+      Descriptive statistics were run. Unadjusted, adjusted, and interaction models using binary logistic regression were conducted. 
+      
+## Study Population 
+  Non-institutionalized US adults (18 years+)
+  
+# Results 
+## Load 2024 BRFSS and select variables 
+```{r}
+# Load 2024 BRFSS data and haven package 
+library(haven)
+X2024_BRFSS <- read_sav("/Users/handeberhan/Desktop/Homework/BRFSS Datasets/2024_BRFSS.sav")
+
+# Select income, insurance, and sex variables from data 
+data_selected <- X2024_BRFSS %>%
+  select(
+    PRIMINS2,     # insurance variable
+    INCOME3,      # income categories
+    SEXVAR,       # sex
+  )
+
+# Select diabetes diagnosis test, race, and age variables
+data_selected <- X2024_BRFSS %>%
+  select(
+    PDIABTS1,     # blood test for diabetes
+    `@_IMPRACE`,   # race/ethnicity
+    `@_AGEG5YR`    # existing age variable
+  )
+```
+
+## Recode all variables and removing missing values 
+```{r}
+# Recode all variables 
+
+# Recode PDIABTS1 (1 = Yes, 2–6,8 = No; 7,9, missing = NA)
+analytic <- X2024_BRFSS %>%
+  mutate(
+    screened = case_when(
+      PDIABTS1 == 1 ~ 1,                    # had test in last year → YES
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,     # all "No" / not within past-year answers → NO
+      PDIABTS1 %in% c(7,9) ~ NA_real_,      # Don’t know / Refused → missing
+      TRUE ~ NA_real_                       # Blank or other → missing
+    )
+  )
+
+# Exclude missing from PDIABTS1 
+analytic <- X2024_BRFSS %>%
+  mutate(
+    PDIABTS1 = as.numeric(PDIABTS1),
+    PDIABTS1 = ifelse(PDIABTS1 %in% c(7, 9), NA, PDIABTS1)
+  ) %>%
+  drop_na(PDIABTS1)
+
+# Recode PDIABTS1 with no missing values 
+analytic <- analytic %>%
+  mutate(
+    screened = case_when(
+      PDIABTS1 == 1 ~ 1,                    # Past year → YES
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,     # All non-past-year answers → NO
+      TRUE ~ NA_real_
+    )
+  )
+
+#Recode PRIMNS2 
+analytic <- X2024_BRFSS %>%
+  mutate(
+    screened = case_when(
+      PDIABTS1 == 1 ~ 1,
+      PDIABTS1 %in% c(2,3,4,5,6,8) ~ 0,
+      PDIABTS1 %in% c(7,9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    insurance = case_when(
+      PRIMINS2 %in% c(1,2,3,5,88) ~ PRIMINS2,    # keep these values as is
+      PRIMINS2 %in% c(4,6,7,8,9,10) ~ 99,        # recode these as "Other"
+      PRIMINS2 %in% c(77, 99) ~ NA_real_,        # missing
+      TRUE ~ NA_real_                            # blank/missing
+    )
+  )
+
+# Remove missing from PRIMINS2
+analytic <- analytic %>%
+  mutate(
+    PRIMINS2 = as.numeric(PRIMINS2),
+    PRIMINS2 = ifelse(PRIMINS2 %in% c(77, 99), NA, PRIMINS2)
+  ) %>%
+  drop_na(PRIMINS2)
+
+# Recode PRIMINS2 without missing values 
+analytic <- analytic %>%
+  mutate(
+    insurance = case_when(
+      PRIMINS2 %in% c(1, 2, 3, 5, 88) ~ PRIMINS2,   # keep as is
+      PRIMINS2 %in% c(4, 6, 7, 8, 9, 10) ~ 99,       # recode to "Other"
+      TRUE ~ NA_real_                               # should not occur after drop_na
+    )
+  )
+
+# Remove missing from INCOME3
+analytic <- analytic %>%
+  mutate(
+    INCOME3 = as.numeric(INCOME3), # keep categories as is 
+    INCOME3 = ifelse(INCOME3 %in% c(77, 99), NA, INCOME3)
+  ) %>%
+  drop_na(INCOME3) #remove missing variables 
+
+# Remove missing from SEX
+analytic <- analytic %>%
+  mutate(
+    SEXVAR = as.numeric(SEXVAR),  
+    SEXVAR = ifelse(SEXVAR %in% c(1, 2), SEXVAR, NA)
+  ) %>%
+  drop_na(SEXVAR)
+
+# Remove missing from AGE
+analytic <- analytic %>%
+  mutate(
+    `@_AGE65YR` = as.numeric(`@_AGE65YR`),
+    `@_AGE65YR` = ifelse(`@_AGE65YR` %in% c(1, 2), `@_AGE65YR`, NA)
+  ) %>%
+  drop_na(`@_AGE65YR`)
+
+# Remove missing from RACE
+analytic <- analytic %>%
+  mutate(
+    `@_IMPRACE` = as.numeric(`@_IMPRACE`),
+    `@_IMPRACE` = ifelse(`@_IMPRACE` %in% c(1,2,3,4,5,6), `@_IMPRACE`, NA)
+  ) %>%
+  drop_na(`@_IMPRACE`)
+
+# Recode all variables after removing missing variables under analytic_clean 
+analytic_clean <- analytic_clean %>%
+  mutate(
+    screened_cat = factor(screened, levels = c(0,1),
+                          labels = c("No Screening", "Screened")),
+
+    insurance_cat = factor(insurance, levels = c(1,2,3,5,88,99),
+                           labels = c("Employer/Union Plan","Private Plan",
+                                      "Medicare","Medicaid","No Coverage", "Other")),
+
+    age_cat = factor(`@_AGE65YR`, levels = c(2,1), labels = c("18-64","65+")),
+
+    sex_cat = factor(SEXVAR, levels = c(1,2), labels = c("Male","Female")),
+
+    race_cat = factor(`@_IMPRACE`,
+                      levels = c(1,2,3,4,5,6),
+                      labels = c("White","Black","Asian","AIAN","Hispanic","Other")),
+
+    income_cat = factor(INCOME3, levels = 1:11,
+                        labels = c("Less than $10,000",
+                                   "$10,000 to < $15,000",
+                                   "$15,000 to < $20,000",
+                                   "$20,000 to < $25,000",
+                                   "$25,000 to < $35,000",
+                                   "$35,000 to < $50,000",
+                                   "$50,000 to < $75,000",
+                                   "$75,000 to < $100,000",
+                                   "$100,000 to < $150,000",
+                                   "$150,000 to < $200,000",
+                                   "$200,000 or more"))
+  )
+
+# Show summary of all recoded variables 
+summary(analytic_clean[, c("insurance_cat", "age_cat", "sex_cat",
+                           "race_cat", "income_cat", "screened")])
+
+# Create table or recoded income variables 
+table(analytic_clean$income_cat, useNA = "ifany")
+```
+
+## Calculate sample sizes after removing missing values 
+```{r}
+# Calculate sample size after excluding all missing values
+
+# Starting sample size (Entire BRFSS dataset)
+start_n <- nrow(X2024_BRFSS)
+start_n
+
+# After removing missing PDIABTS1 (diabetes screening) 
+analytic_after_pdiabts1 <- X2024_BRFSS %>%
+  mutate(
+    PDIABTS1 = as.numeric(PDIABTS1),
+    PDIABTS1 = ifelse(PDIABTS1 %in% c(7, 9), NA, PDIABTS1)
+  ) %>%
+  drop_na(PDIABTS1)
+
+n_after_pdiabts1 <- nrow(analytic_after_pdiabts1)
+excluded_pdiabts1 <- start_n - n_after_pdiabts1
+
+excluded_pdiabts1
+n_after_pdiabts1
+
+# After removing missing PRIMINS2
+analytic_after_ins <- analytic_after_pdiabts1 %>%
+  mutate(
+    PRIMINS2 = as.numeric(PRIMINS2),
+    PRIMINS2 = ifelse(PRIMINS2 %in% c(77, 99), NA, PRIMINS2)
+  ) %>%
+  drop_na(PRIMINS2)
+
+n_after_ins <- nrow(analytic_after_ins)
+excluded_ins <- n_after_pdiabts1 - n_after_ins
+
+excluded_ins
+n_after_ins
+
+# After removing missing INCOME3
+analytic_after_income <- analytic_after_ins %>%
+  mutate(
+    INCOME3 = as.numeric(INCOME3),
+    INCOME3 = ifelse(INCOME3 %in% c(77, 99), NA, INCOME3)
+  ) %>%
+  drop_na(INCOME3)
+
+n_after_income <- nrow(analytic_after_income)
+excluded_income <- n_after_ins - n_after_income
+
+excluded_income
+n_after_income
+
+# After removing missing IMPRACE 
+analytic_after_race <- analytic_after_income %>%
+  mutate(
+    `@_IMPRACE` = as.numeric(`@_IMPRACE`),
+    `@_IMPRACE` = ifelse(`@_IMPRACE` %in% c(1,2,3,4,5,6), `@_IMPRACE`, NA)
+  ) %>%
+  drop_na(`@_IMPRACE`)
+
+n_after_race <- nrow(analytic_after_race)
+excluded_race <- n_after_income - n_after_race
+
+excluded_race
+n_after_race
+
+# After removing missing SEXVAR 
+analytic_after_sex <- analytic_after_race %>%
+  mutate(
+    SEXVAR = as.numeric(SEXVAR),
+    SEXVAR = ifelse(SEXVAR %in% c(1, 2), SEXVAR, NA)
+  ) %>%
+  drop_na(SEXVAR)
+
+n_after_sex <- nrow(analytic_after_sex)
+excluded_sex <- n_after_race - n_after_sex
+
+excluded_sex
+n_after_sex
+
+# After removing AGE65YR
+analytic_after_age <- analytic_after_sex %>%
+  mutate(
+    `@_AGE65YR` = as.numeric(`@_AGE65YR`),
+    `@_AGE65YR` = ifelse(`@_AGE65YR` %in% c(1, 2), `@_AGE65YR`, NA)
+  ) %>%
+  drop_na(`@_AGE65YR`)
+
+n_after_age <- nrow(analytic_after_age)
+excluded_age <- n_after_sex - n_after_age
+
+excluded_age
+n_after_age
+```
+
+## Flowchart 
+```{r}
+# Download DiagrammeR package 
+library(DiagrammeR)
+
+# Create flowchart 
+grViz("
+digraph flowchart {
+
+  node [fontname = Helvetica, shape = rectangle, fontsize = 14]
+
+  node1 [label = 'BRFSS 2024 Adult Sample\\nN = 457,670']
+  node2 [label = 'Excluded missing diabetes test (PDIABTS1): n = 150,532\\nRemaining = 307,138']
+  node3 [label = 'Excluded missing insurance (PRIMINS2): n = 5,476\\nRemaining = 145,056']
+  node4 [label = 'Excluded missing income (INCOME3): n = 24,604\\nRemaining = 120,452']
+  node5 [label = 'Excluded missing sex (SEXVAR): n = 0\\nRemaining = 120,452']
+  node6 [label = 'Excluded missing age (_AGE65YR): n = 0\\nRemaining = 120,452']
+  node7 [label = 'Excluded missing race (_IMPRACE): n = 928\\nFINAL analytic sample = 119,524']
+
+  node1 -> node2 -> node3 -> node4 -> node5 -> node6 -> node7
+}
+")
+```
+
+## Table 1: Descriptives Table 
+```{r}
+# Create Table 1
+
+# Load packages 
+library(table1)
+library(knitr)
+library(dplyr)
+
+# Global table1 options
+options(table1.percent = FALSE)  # remove % symbol
+options(table1.bold    = FALSE)  # remove bold formatting
+
+# 1. Create a copy of analytic_clean just for the table
+analytic_clean_t1 <- analytic_clean %>%
+  # drop rows with missing screened
+  filter(!is.na(screened)) %>%
+  # create factor version for stratification
+  mutate(
+    screened_cat = factor(
+      screened,
+      levels = c(0, 1),
+      labels = c("No Screening", "Screened")
+    ),
+    # make sure the category variables are characters before gsub
+    age_cat       = gsub("&", "and", as.character(age_cat)),
+    sex_cat       = gsub("&", "and", as.character(sex_cat)),
+    race_cat      = gsub("&", "and", as.character(race_cat)),
+    income_cat    = gsub("&", "and", as.character(income_cat)),
+    insurance_cat = gsub("&", "and", as.character(insurance_cat))
+  )
+
+# 2. Set variable labels for rows
+label(analytic_clean_t1$age_cat)       <- "Age"
+label(analytic_clean_t1$sex_cat)       <- "Sex"
+label(analytic_clean_t1$race_cat)      <- "Race"
+label(analytic_clean_t1$income_cat)    <- "Household Income"
+label(analytic_clean_t1$insurance_cat) <- "Insurance Status"
+
+# 3. Make sure screened_cat is ordered correctly
+analytic_clean_t1$screened_cat <- factor(
+  analytic_clean_t1$screened_cat,
+  levels = c("No Screening", "Screened")
+)
+
+# 4. Compute N and % for column headers
+n_no  <- sum(analytic_clean_t1$screened_cat == "No Screening")
+n_yes <- sum(analytic_clean_t1$screened_cat == "Screened")
+n_tot <- n_no + n_yes
+
+p_no  <- round(n_no  / n_tot * 100, 1)
+p_yes <- round(n_yes / n_tot * 100, 1)
+p_tot <- 100
+
+# Include N and % in group labels
+levels(analytic_clean_t1$screened_cat) <- c(
+  sprintf("No Screening (N = %s; %s)", n_no,  p_no),
+  sprintf("Screened (N = %s; %s)",     n_yes, p_yes)
+)
+
+# Turn off automatic N rows in all table1 tables
+options(table1.include.n = FALSE)
+
+# 5. Build Table 1
+Tab1 <- table1(
+  ~ age_cat + sex_cat + race_cat + income_cat + insurance_cat | screened_cat,
+  data         = analytic_clean_t1,
+  overall      = overall_lab,
+  rowlabelhead = "Variable",
+  caption      = "Table 1. Descriptive Characteristics by Diabetes Screening Status (BRFSS 2024)"
+)
+
+Tab1
+```
+
+## Bar Chart 
+```{r}
+# Create bar chart: Proportion Screened for Diabetes by Insurance Status
+ggplot(
+  analytic_clean %>% 
+    filter(!is.na(insurance_cat), !is.na(screened_cat)),
+  aes(x = insurance_cat, fill = screened_cat)
+) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Proportion Screened for Diabetes by Insurance Status (BRFSS 2024)",
+    x = "Insurance Status",
+    y = "Proportion",
+    fill = "Screening Status"
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+Interpretation: 
+- This figure shows that those with Medicare had the highest levels of diabetes screenings and those with No Coverage had the lowest levels. 
+- This indicates that Medicare and Other insurance types are effective at encouraging and getting patients to take diabetes screenings. 
+
+## Binary Logistic Regression Models 
+### Model 1: Unadjusted 
+```{r}
+# Unadjusted Model 1 
+analytic <- analytic %>%
+  mutate(
+    insurance = case_when(
+      PRIMINS2 %in% c(1, 2, 3, 5, 88) ~ PRIMINS2,   # keep as individual categories
+      PRIMINS2 %in% c(4, 6, 7, 8, 9, 10) ~ 99,       # recode these into "Other"
+      TRUE ~ NA_real_                               # missing, DK, refused, blank
+    )
+  )
+
+analytic$insurance <- factor(
+  analytic$insurance,
+  levels = c(1, 2, 3, 5, 88, 99),
+  labels = c(
+    "Employer/Union Plan",
+    "Private Plan",
+    "Medicare",
+    "Medicaid",
+    "No Coverage",
+    "Other"
+  )
+)
+
+table(analytic$insurance, useNA = "ifany")
+
+model1 <- glm(
+  screened ~ insurance,
+  data = analytic,
+  family = binomial
+)
+
+summary(model1)
+odds.n.ends(model1)
+
+```
+Interpretation: 
+- The model is statistically significant (p<0.001) indicating that insurance status is strongly associated with diabetes screenings 
+- The model correctly classified 71.9% of observations 
+- The model is good at identifying patients who were screened (high sensitivity) but poor at identifying those not screened (low specificity)
+- Those with private insurance had similar odds (OR = 0.99) of diabetes screening compared to employer-based insurance (reference)
+- Compared to those on employer-based insurance, adults on Medicare had 2.74 times the odds of getting screened 
+- Those on Medicaid had 0.94 times the odds of getting screened compared to the reference 
+- Uninsured individuals had 0.26 times the odds of being screened compared to the employer group. This was a statistically significant decrease compared to the reference. 
+- Individuals on "Other" insurance types had 1.31 times the odds of being screened compared to the employer-based group.
+- Overall, those on Medicare and Other Insurance had higher odds of being screened compared to employer-based plans
+
+### Model 2: Adjusted 
+```{r}
+# Adjusted Model 2 - Controlling for age, race, sex, and income 
+model2 <- glm(
+  screened ~ insurance_cat + age_cat + sex_cat + race_cat + income_cat,
+  data = analytic_clean,
+  family = binomial
+)
+
+summary(model2)
+odds.n.ends(model2)
+```
+Interpretation: 
+- Those on private insurance had 0.96 times the odds of being screened compared to those on employer-based plans 
+- Those on Medicare had 1.36 times the odds of being screened compared to those on employer-based plans
+- Those on Medicaid had 1.07 times the odds of being screened compared to those on employer-based plans
+- Those with No Coverage had 0.31 times the odds of being screened compared to those on employer-based plans
+- Those with Other Insurance had 1.29 times the odds of being screened compared to those on employer-based plans
+- Overall, those with Medicare and Other Insurance had higher odds of being screened compared to the reference
+- Those 65 years+ had 0.34 times the odds of being screened compared to those 18-64 years 
+- Females had 1.26 times the odds of being screened compared to men
+- Black adults had 1.41 times the odds of being screened and Hispanic adults had 1.10 times the odds of being screened compared to White adults 
+- Those with income of $200,000+ had 1.70 times the odds of being screened compared to those earning less than $10,000 
+
+## Likelihood Ratio Test 1: (Model 1 vs. Model 2)
+```{r}
+# Likelihood Ratio Test - Comparing unadjusted vs adjusted models 
+model1 <- glm(
+  screened ~ insurance_cat,
+  data = analytic_clean,
+  family = binomial
+)
+
+model2 <- glm(
+  screened ~ insurance_cat + age_cat + sex_cat + race_cat + income_cat,
+  data = analytic_clean,
+  family = binomial
+)
+
+lmtest::lrtest(model1, model2)
+
+```
+Interpretation: 
+- The LRT is statistically significant as it has p value of < 2.2e-16
+- Therefore, Model 2 fits the data better than Model 1. Income, age, sex, and race explain the variation in screening behavior not fully explained by insurance status alone. 
+
+## Table 2: Adjusted Odds Ratio Table 
+```{r}
+# Ajusted Odds Ratio Table 
+
+# Create label map
+label_map <- c(
+  # Insurance
+  "insurance_catPrivate Plan"   = "Private Plan vs Employer/Union",
+  "insurance_catMedicare"       = "Medicare vs Employer/Union",
+  "insurance_catMedicaid"       = "Medicaid vs Employer/Union",
+  "insurance_catNo Coverage"    = "No Coverage vs Employer/Union",
+  "insurance_catOther"          = "Other Insurance vs Employer/Union",
+  
+  # Age + Sex
+  "age_cat65+"                  = "Age 65+ vs 18–64",
+  "sex_catFemale"               = "Female vs Male",
+  
+  # Race
+  "race_catBlack"               = "Black vs White",
+  "race_catAsian"               = "Asian vs White",
+  "race_catAIAN"                = "AIAN vs White",
+  "race_catHispanic"            = "Hispanic vs White",
+  "race_catOther"               = "Other Race vs White",
+  
+  # Income
+  "income_cat$10,000 to < $15,000"   = "$10k–$15k vs < $10k",
+  "income_cat$15,000 to < $20,000"   = "$15k–$20k vs < $10k",
+  "income_cat$20,000 to < $25,000"   = "$20k–$25k vs < $10k",
+  "income_cat$25,000 to < $35,000"   = "$25k–$35k vs < $10k",
+  "income_cat$35,000 to < $50,000"   = "$35k–$50k vs < $10k",
+  "income_cat$50,000 to < $75,000"   = "$50k–$75k vs < $10k",
+  "income_cat$75,000 to < $100,000"  = "$75k–$100k vs < $10k",
+  "income_cat$100,000 to < $150,000" = "$100k–$150k vs < $10k",
+  "income_cat$150,000 to < $200,000" = "$150k–$200k vs < $10k",
+  "income_cat$200,000 or more"       = "$200k+ vs < $10k"
+)
+
+# Extract coefficient names from Model 2 
+coef_names <- names(coef(model2))
+
+# Build table with ORs and 95% CI 
+model2_df <- data.frame(
+  Variable = coef_names,
+  OR = exp(coef(model2)),
+  `Lower 95% CI` = exp(confint(model2)[,1]),
+  `Upper 95% CI` = exp(confint(model2)[,2])
+)
+
+# Remove intercept
+model2_df <- model2_df[model2_df$Variable != "(Intercept)", ]
+
+# Apply readable labels
+model2_df$Variable <- label_map[model2_df$Variable]
+
+# Display final table
+print(model2_df, n = Inf)
+```
+
+### Model 4: Interaction (Insurance x Sex)
+```{r}
+# Create Interaction Model 4 - Insurance x Sex 
+model4 <- glm(
+  screened ~ insurance_cat * sex_cat +
+    age_cat + race_cat + income_cat,
+  data = analytic_clean,
+  family = binomial
+)
+
+summary(model4)
+odds.n.ends(model4)
+```
+Interpretation: 
+- Women on private insurance had the same odds (OR = 1.00) of being screened compared to men on private insurance 
+- Women on Medicare had 0.76 times the odds of being screened compared to men on Medicare
+- Women on Medicaid had 0.95 times the odds of being screened compared to men on Medicaid
+- Women with No Coverage had 1.27 times the odds of being screened compared to men with No Coverage 
+- Women with Other Insurance had 0.71 times the odds of being screened compared to men with Other Insurance 
+- These results indicate that insurance coverage impacts men and women differently with Medicare increasing screening odds less for women compared to men and uninsured women being more likely to get screened compared to uninsured men. 
+
+## Likelihood Ratio Test 2: (Adjusted vs Interaction)
+```{r}
+# Likelihood Ratio Test - Comparing adjusted vs interaction models
+lmtest::lrtest(model2, model4)
+```
+Interpretation: 
+- Compared to the adjusted model, the interaction model had a higher log-likelihood indicating that the interaction model fits the data better 
+- The Chi-square test is also statistically significant (p < 2.2e-16)
+
+## Table 3: Interaction Model (Insurance x Sex)
+```{r}
+# Create Table 3: Interaction Model of Insurance x Sex 
+
+# Get all coefficient names from model4
+coef_names <- names(coef(model4))
+
+# Keep ONLY interaction terms (those containing ":")
+interaction_names <- coef_names[grepl(":", coef_names)]
+
+# Build OR table just for these interaction terms
+model4_int_df <- data.frame(
+  Variable = interaction_names,
+  OR        = exp(coef(model4)[interaction_names]),
+  `Lower 95% CI` = exp(confint(model4)[interaction_names, 1]),
+  `Upper 95% CI` = exp(confint(model4)[interaction_names, 2])
+)
+
+# Apply readable labels from your label_map
+model4_int_df$Variable <- label_map[model4_int_df$Variable]
+
+# Rename columns nicely
+colnames(model4_int_df) <- c("Variable", "OR", "Lower 95% CI", "Upper 95% CI")
+
+# Show only the interaction terms table
+model4_int_df
+
+```
+
+## Assumption Testing 
+```{r}
+# Test for Multicollinearity (VIF)
+library(car)
+vif(model2)
+
+# Test for Influential Observations 
+
+# Load package 
+library(broom)
+
+# Create diagnostic dataset
+diag_m2 <- augment(model2) %>%
+  mutate(index = 1:n())
+
+# Cook's Distance Plot
+plot(model2, which = 4, id.n = 3, col = "deeppink")
+abline(h = 1, lty = 2, col = "deeppink")
+
+# Count number of extreme Cook's D observations
+sum(diag_m2$.cooksd > 1)
+
+# Leverage plot
+plot(model2, which = 5, id.n = 3, col = "purple")
+
+# DFBetas
+dfb <- dfbetas(model2)
+summary(dfb)
+
+# Load packages 
+install.packages("ResourceSelection")
+library(ResourceSelection)
+
+# Goodness-of-Fit Test 
+hoslem.test(
+  x = analytic_clean$screened,   # 0/1 diabetes screening outcome
+  y = fitted(model2),            # predicted probabilities from adjusted model
+  g = 10                         # deciles of risk
+)
+```
+Interpretation: 
+- The VIF values were all < 5 which indicates that there is no concerning multicollinearity 
+- No Cook's D values exceeded 1 which indicates that no single observation had a disproportionate influence on the model. Therefore the model is not being driven by outliers. 
+- In the residuals vs leverage plot, a few points had high leverage indicating that some participants had unusual predictor combinations, but none of them distorted the model. Additionally, residuals were within reasonable bounds and no observations fell into the high influence zone. 
+- DFBetas were all small indicating that no predictor coefficient changes significantly when a single observation is removed. 
+- The Goodness-of-Fit Test had a p value of < 0.001 indicating that the model had a poor fit. However, this may be explained by the large sample size since this test is overly sensitive to large datasets like BRFSS.
+
+## Predicted Probabilities and ROC Curves 
+```{r}
+library(odds.n.ends)
+
+# Predicted Probabilities for Model 2 (Adjusted)
+odds.n.ends(model2, predProbPlot = TRUE)
+
+# ROC Curve for Model 2 
+odds.n.ends(model2, rocPlot = TRUE)
+
+# Predicted Probabilities for Model 4 (Interaction) 
+odds.n.ends(model4, predProbPlot = TRUE)
+
+# ROC Curve for Model 4  
+odds.n.ends(model4, rocPlot = TRUE)
+```
+Interpretation: 
+
+Predicted Probabilities: 
+- The adjusted model predicts screening probabilities around 0.60-0.90 for people who got screened. 
+- The adjusted model predicts screenning probabilities around 0.20 - 0.60 for people who were not screened. 
+- Overall, the model had difficulty distinguishing screened from unscreened individuals. 
+- The interaction model did not improve prediction even though interaction did significantly improve model fit. Model 4 had near identical values for screened individuals (0.6 - 0.9) and for unscreened individuals (0.2-0.6) as Model 2. 
+
+ROC Curves: 
+- Both Model 2 (Adjusted) and Model 4 (Interaction) had a ROC of 0.68 which indicates that these models perfom better than chance but they had only fair discrimination ability. Although they accurately rank screened vs unscreened individuals 68% of the time, it is not strong enough to use for real-world predictions. 
+
+# Save cleaned dataset 
+```{r}
+library(haven)
+write_sav(analytic_clean, "/Users/handeberhan/Desktop/final_dataset.sav")
+```
+
+# Discussion 
+Older adults, women, Black and Hispanic adults, higher income groups and those with insurance coverage had higher rates of diabetes screenings. Both the unadjusted and adjusted models demonstrated a strong association between insurance status and rates of diabetes screening. Those on Medicare and Other Insurance types had the highest rates of screenings compared to employer-based insurance plans and those who were uninsured had the lowest rates of screenings indicating that lack of insurance served as a major barrier for diabetes screenings. Furthermore, sex significantly modified the association between insurance status and screenings. Uninsured women had higher rates of screenings compared to men and men on Medicare had higher rates of screenings compared to women. These results indicate that insurance coverage influences screening rates for women and men differently. 
+
+# Reproducibility 
+- To ensure transparency and reproducibility, all data cleaning and  statistical analysis (descriptives and regression models) were conducted in R and uploaded to Github repository 
